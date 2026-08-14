@@ -9,6 +9,7 @@ from datetime import datetime
 
 # ВАЖНО: Отключаем предупреждения о небезопасном SSL, чтобы не засорять логи GitHub
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+VERIFY_SSL = False
 
 # --- 1. НАСТРОЙКИ И КОНСТАНТЫ ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
