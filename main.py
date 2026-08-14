@@ -3,8 +3,12 @@ import json
 import time
 import requests
 import feedparser
+import urllib3
 from gigachat import GigaChat
 from datetime import datetime
+
+# ВАЖНО: Отключаем предупреждения о небезопасном SSL, чтобы не засорять логи GitHub
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- 1. НАСТРОЙКИ И КОНСТАНТЫ ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -18,7 +22,7 @@ RSS_URLS = [
     "https://ria.ru/export/rss2/archive/index.xml"
 ]
 
-# --- 2. РАБОТА С СОСТОЯНИЕМ (ЧТОБЫ ПОМНИТЬ ПОСЛЕДНИЙ ЗАПУСК) ---
+# --- 2. РАБОТА С СОСТОЯНИЕМ ---
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r") as f:
@@ -33,9 +37,9 @@ def save_state(state):
 def get_new_news(last_run_time):
     new_news = []
     for url in RSS_URLS:
+        # Иногда feedparser тоже может ругаться на SSL, но обычно он работает нормально.
         feed = feedparser.parse(url)
         for entry in feed.entries:
-            # Преобразуем время публикации в timestamp
             pub_time = time.mktime(entry.published_parsed)
             if pub_time > last_run_time:
                 new_news.append({
@@ -45,22 +49,24 @@ def get_new_news(last_run_time):
                 })
     return new_news
 
-# --- 4. ПОЛУЧЕНИЕ ПОГОДЫ ---
+# --- 4. ПОЛУЧЕНИЕ ПОГОДЫ (ИСПРАВЛЕНО ДЛЯ SSL) ---
 def get_weather():
     try:
         # Текущая погода
         url_curr = f"http://api.openweathermap.org/data/2.5/weather?q=Moscow&appid={OWM_KEY}&units=metric&lang=ru"
-        curr = requests.get(url_curr).json()
+        # ДОБАВЛЕНО: verify=False
+        curr = requests.get(url_curr, verify=False).json()
         
-        # Прогноз на 5 дней (нам нужны первые 24 часа - сегодня, и следующие - завтра)
+        # Прогноз
         url_forecast = f"http://api.openweathermap.org/data/2.5/forecast?q=Moscow&appid={OWM_KEY}&units=metric&lang=ru"
-        forecast = requests.get(url_forecast).json()
+        # ДОБАВЛЕНО: verify=False
+        forecast = requests.get(url_forecast, verify=False).json()
         
         # Форматируем текущую
         curr_text = f"Сейчас: {curr['main']['temp']}°C, {curr['weather'][0]['description']}, облачность {curr['clouds']['all']}%."
         
-        # Форматируем прогноз (берем максимумы и минимумы на сегодня и завтра)
-        today_list = forecast['list'][:8] # 8 интервалов по 3 часа = 24 часа
+        # Форматируем прогноз
+        today_list = forecast['list'][:8] 
         tomorrow_list = forecast['list'][8:16]
         
         def format_day(day_list, day_name):
@@ -73,6 +79,7 @@ def get_weather():
         
         return f"🌤 ПОГОДА В МОСКВЕ:\n{curr_text}\n{today_text}\n{tomorrow_text}"
     except Exception as e:
+        print(f"Ошибка при получении погоды: {e}")
         return "🌤 Погода: данные временно недоступны."
 
 # --- 5. ОТПРАВКА В GIGACHAT ---
@@ -80,9 +87,8 @@ def process_with_gigachat(news_list, weather_text):
     if not news_list:
         return None
         
-    # Формируем текст новостей для промпта
     news_text_for_prompt = ""
-    for i, news in enumerate(news_list[:25]): # Берем максимум 25 свежих, чтобы не превысить лимит токенов
+    for i, news in enumerate(news_list[:25]): 
         news_text_for_prompt += f"{i+1}. {news['title']} (Ссылка: {news['link']})\n"
 
     prompt = f"""Ты — строгий и профессиональный редактор новостного Telegram-канала. 
@@ -98,11 +104,11 @@ def process_with_gigachat(news_list, weather_text):
 3. К каждой новости добавь 1-2 предложения справочной информации (контекст, почему это важно, предыстория).
 4. Обязательно оставь ссылку на источник в конце каждой новости.
 5. В самом конце поста добавь блок с погодой.
-6. Используй эмодзи для заголовков, но не перебарщив. Форматируй текст для Telegram (жирный шрифт для заголовков).
+6. Используй эмодзи для заголовков, но не перебарщив. Форматируй текст для Telegram (жирный шрифт для заголовков через теги <b> и </b>).
 
-Верни ТОЛЬКО готовый текст поста, без лишних вступлений вроде "Вот ваш пост"."""
+Верни ТОЛЬКО готовый текст поста, без лишних вступлений."""
 
-    # Подключаемся к GigaChat
+    # verify_ssl=False здесь уже был, но на всякий случай оставляем
     with GigaChat(credentials=GIGA_CREDENTIALS, verify_ssl=False, scope="GIGACHAT_API_PERS") as giga:
         response = giga.chat(prompt)
         return response.choices[0].message.content
@@ -115,7 +121,6 @@ def send_to_telegram(text):
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     
-    # Telegram имеет лимит 4096 символов. Если текст длинный, режем его.
     while len(text) > 0:
         chunk = text[:4090]
         text = text[4090:]
@@ -123,11 +128,10 @@ def send_to_telegram(text):
         payload = {
             "chat_id": CHAT_ID,
             "text": chunk,
-            "parse_mode": "HTML" # GigaChat иногда использует Markdown, но HTML надежнее. 
-            # Примечание: если GigaChat выдаст ошибку форматирования, можно убрать parse_mode.
+            "parse_mode": "HTML" 
         }
         requests.post(url, data=payload)
-        time.sleep(1) # Небольшая пауза, чтобы Telegram не заблокировал за спам
+        time.sleep(1) 
 
 # --- ГЛАВНАЯ ФУНКЦИЯ ---
 def main():
@@ -142,7 +146,6 @@ def main():
     
     if not new_news:
         print("Новых новостей нет. Выход.")
-        # Все равно обновим время, чтобы не спамить API
         state["last_run"] = current_time
         save_state(state)
         return
@@ -150,13 +153,12 @@ def main():
     print("Получение погоды...")
     weather = get_weather()
     
-    print("Обработка в GigaChat (это может занять минуту)...")
+    print("Обработка в GigaChat...")
     final_post = process_with_gigachat(new_news, weather)
     
     print("Отправка в Telegram...")
     send_to_telegram(final_post)
     
-    # Сохраняем время текущего запуска
     state["last_run"] = current_time
     save_state(state)
     print("Готово!")
