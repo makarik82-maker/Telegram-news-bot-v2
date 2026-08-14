@@ -181,7 +181,7 @@ def process_with_gigachat(news_list: list, weather_text: str) -> str:
             "Authorization": f"Bearer {token}",
         }
         payload = {
-            "model": "GigaChat-3-Ultra",
+            "model": "GigaChat-2",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
             "max_tokens": 1500,
