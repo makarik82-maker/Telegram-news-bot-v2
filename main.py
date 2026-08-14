@@ -5,30 +5,16 @@ import requests
 import feedparser
 import urllib3
 import ssl
-import httpx
+import certifi
 from gigachat import GigaChat
 
-# ВАЖНО: Глобально отключаем проверку SSL для всех библиотек
-os.environ['CURL_CA_BUNDLE'] = ''
-os.environ['REQUESTS_CA_BUNDLE'] = ''
-os.environ['SSL_CERT_FILE'] = ''
-os.environ['WEBSOCKET_CLIENT_CA_BUNDLE'] = ''
+# Устанавливаем правильные сертификаты
+os.environ['SSL_CERT_FILE'] = certifi.where()
+os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
+os.environ['CURL_CA_BUNDLE'] = certifi.where()
 
 # Отключаем предупреждения
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# Создаем контекст SSL без проверки
-ssl._create_default_https_context = ssl._create_unverified_context
-
-# Патчим httpx.Client чтобы он не проверял SSL
-_original_client = httpx.Client
-
-class NoVerifyClient(httpx.Client):
-    def __init__(self, *args, **kwargs):
-        kwargs['verify'] = False
-        super().__init__(*args, **kwargs)
-
-httpx.Client = NoVerifyClient
 
 # --- 1. НАСТРОЙКИ ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -90,7 +76,7 @@ def get_weather():
         today_text = format_day(today_list, "Сегодня")
         tomorrow_text = format_day(tomorrow_list, "Завтра")
         
-        return f"🌤 ПОГОДА В МОСКВЕ:\n{curr_text}\n{today_text}\n{tomorrow_text}"
+        return f" ПОГОДА В МОСКВЕ:\n{curr_text}\n{today_text}\n{tomorrow_text}"
     except Exception as e:
         print(f"Ошибка погоды: {e}")
         return "🌤 Погода: данные недоступны."
@@ -156,6 +142,7 @@ def send_to_telegram(text):
 # --- ГЛАВНАЯ ---
 def main():
     print("Запуск...")
+    print(f"SSL_CERT_FILE: {os.environ.get('SSL_CERT_FILE')}")
     state = load_state()
     last_run = state["last_run"]
     current_time = time.time()
