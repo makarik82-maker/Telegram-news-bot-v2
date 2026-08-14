@@ -2,7 +2,7 @@ name: Daily News Bot
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '0 */2 * * *'
   workflow_dispatch:
 
 permissions:
@@ -41,4 +41,7 @@ jobs:
         git config --global user.name 'GitHub Actions Bot'
         git config --global user.email 'actions@github.com'
         git add published_news.json
-        git diff --staged --quiet || (git commit -m "Update published_news.json" && git push)
+        # Сначала подтягиваем изменения с сервера
+        git pull --rebase origin main || true
+        # Затем коммитим и пушим
+        git diff --staged --quiet || (git commit -m "Update published_news.json" && git push origin main)
