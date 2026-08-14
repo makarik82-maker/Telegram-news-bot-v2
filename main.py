@@ -4,14 +4,33 @@ import time
 import requests
 import feedparser
 import urllib3
+import ssl
 import httpx
 from gigachat import GigaChat
-from datetime import datetime
 
-# ОТКЛЮЧАЕМ ВСЕ ПРЕДУПРЕЖДЕНИЯ SSL
+# ВАЖНО: Глобально отключаем проверку SSL для всех библиотек
+os.environ['CURL_CA_BUNDLE'] = ''
+os.environ['REQUESTS_CA_BUNDLE'] = ''
+os.environ['SSL_CERT_FILE'] = ''
+os.environ['WEBSOCKET_CLIENT_CA_BUNDLE'] = ''
+
+# Отключаем предупреждения
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- 1. НАСТРОЙКИ И КОНСТАНТЫ ---
+# Создаем контекст SSL без проверки
+ssl._create_default_https_context = ssl._create_unverified_context
+
+# Патчим httpx.Client чтобы он не проверял SSL
+_original_client = httpx.Client
+
+class NoVerifyClient(httpx.Client):
+    def __init__(self, *args, **kwargs):
+        kwargs['verify'] = False
+        super().__init__(*args, **kwargs)
+
+httpx.Client = NoVerifyClient
+
+# --- 1. НАСТРОЙКИ ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GIGA_CREDENTIALS = os.getenv("GIGACHAT_CREDENTIALS")
@@ -23,7 +42,7 @@ RSS_URLS = [
     "https://ria.ru/export/rss2/archive/index.xml"
 ]
 
-# --- 2. РАБОТА С СОСТОЯНИЕМ ---
+# --- 2. СОСТОЯНИЕ ---
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r") as f:
@@ -34,7 +53,7 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
 
-# --- 3. СБОР НОВОСТЕЙ ---
+# --- 3. НОВОСТИ ---
 def get_new_news(last_run_time):
     new_news = []
     for url in RSS_URLS:
@@ -49,7 +68,7 @@ def get_new_news(last_run_time):
                 })
     return new_news
 
-# --- 4. ПОЛУЧЕНИЕ ПОГОДЫ ---
+# --- 4. ПОГОДА ---
 def get_weather():
     try:
         url_curr = f"http://api.openweathermap.org/data/2.5/weather?q=Moscow&appid={OWM_KEY}&units=metric&lang=ru"
@@ -76,7 +95,7 @@ def get_weather():
         print(f"Ошибка погоды: {e}")
         return "🌤 Погода: данные недоступны."
 
-# --- 5. ОТПРАВКА В GIGACHAT ---
+# --- 5. GIGACHAT ---
 def process_with_gigachat(news_list, weather_text):
     if not news_list:
         return None
@@ -102,9 +121,7 @@ def process_with_gigachat(news_list, weather_text):
 
 Верни только готовый пост."""
 
-    # Создаем клиент httpx с отключенной проверкой SSL
     try:
-        # Пробуем создать GigaChat с отключенным SSL
         with GigaChat(
             credentials=GIGA_CREDENTIALS, 
             verify_ssl=False, 
@@ -114,13 +131,12 @@ def process_with_gigachat(news_list, weather_text):
             return response.choices[0].message.content
     except Exception as e:
         print(f"Ошибка GigaChat: {e}")
-        # Если не получилось с GigaChat, пробуем простой вариант
-        return f"️ СРОЧНО: Новости за сегодня\n\nОшибка обработки нейросетью: {str(e)[:100]}\n\n{weather_text}"
+        return f"⚠️ Ошибка обработки: {str(e)[:200]}\n\n{weather_text}"
 
-# --- 6. ОТПРАВКА В TELEGRAM ---
+# --- 6. TELEGRAM ---
 def send_to_telegram(text):
     if not text:
-        print("Нет текста для отправки")
+        print("Нет текста")
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -137,7 +153,7 @@ def send_to_telegram(text):
         requests.post(url, data=payload, verify=False)
         time.sleep(1)
 
-# --- ГЛАВНАЯ ФУНКЦИЯ ---
+# --- ГЛАВНАЯ ---
 def main():
     print("Запуск...")
     state = load_state()
